@@ -17,7 +17,7 @@ Overview:
 
 ![Overview](lab/screenshots/01-overview.png)
 
-Patrol:
+Patrol. Jumlah pintu tiap server mengikuti port yang benar-benar terbuka (`22 SSH`, `80 HTTP`, `8080 APP`, `8091 WORKER`):
 
 ![Patrol](lab/screenshots/02-patrol.png)
 
@@ -25,7 +25,11 @@ Tab File, menampilkan file system tiap server per folder:
 
 ![File system](lab/screenshots/03-file-system.png)
 
-Saat **Serang!** ditekan, Server A keluar dari HAProxy dan trafik pindah ke Server B:
+Tombol **Serang!** punya pilihan jalur **SSH** atau **Web**. Dengan jalur SSH, intruder masuk lewat pintu 22:
+
+![Intruder masuk lewat SSH](lab/screenshots/04-serangan-ssh-masuk.png)
+
+Setelah file kunci diubah, Server A keluar dari HAProxy dan trafik pindah ke Server B:
 
 ![Serangan di Patrol](lab/screenshots/04-serangan-patrol.png)
 
@@ -34,6 +38,12 @@ Saat **Serang!** ditekan, Server A keluar dari HAProxy dan trafik pindah ke Serv
 Setelah file dipulihkan dan health check lolos, Server A kembali ke rotasi:
 
 ![Pulih](lab/screenshots/06-pulih.png)
+
+Dengan jalur Web, intruder masuk lewat pintu 80, dan Server B yang keluar dari rotasi:
+
+![Intruder masuk lewat Web](lab/screenshots/09-serangan-web-masuk.png)
+
+![Serangan web di Patrol](lab/screenshots/10-serangan-web-patrol.png)
 
 ## Situs yang dilayani
 

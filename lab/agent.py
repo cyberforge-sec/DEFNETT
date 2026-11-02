@@ -1,7 +1,9 @@
 import gzip
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import stat
 import threading
 import time
@@ -32,6 +34,24 @@ INVENTORY_RETRY_SECONDS = 30
 INVENTORY_URL = os.environ.get(
     "INVENTORY_URL", COLLECTOR_URL.rsplit("/", 1)[0] + "/patrol/inventory"
 )
+PATROL_EVENT_URL = os.environ.get(
+    "PATROL_EVENT_URL", COLLECTOR_URL.rsplit("/", 2)[0] + "/api/patrol/events"
+)
+AUTH_LOG = os.environ.get("AUTH_LOG", "")
+WEB_LOG = os.environ.get("WEB_LOG", "")
+SSH_PORT = int(os.environ.get("SSH_PORT", "22"))
+WEB_PORT = int(os.environ.get("WEB_PORT", "80"))
+LOGIN_POLL_SECONDS = 2
+FAILED_LOGIN_INTERVAL = 5
+TRUSTED_SSH_METHODS = {
+    item.strip() for item in os.environ.get("TRUSTED_SSH_METHODS", "publickey").split(",") if item.strip()
+}
+SSH_ACCEPTED = re.compile(r"sshd(?:-session)?\[\d+\]: Accepted (\S+) for (\S+) from (\S+) port \d+")
+SSH_FAILED = re.compile(r"sshd(?:-session)?\[\d+\]: Failed \S+ for (?:invalid user )?(\S+) from (\S+) port \d+")
+WEB_REQUEST = re.compile(
+    r'^(\S+) \S+ \S+ \[[^\]]+\] "(\S+) (\S+) [^"]*" (\d{3}) \S+ "[^"]*" "[^"]*"(?: "([^"]*)")?'
+)
+MAX_REPORTED_PORTS = 32
 CANARY = b"DEFNETT-LAB-MALWARE-CANARY"
 VIRTUAL_ROOTS = {"proc", "sys", "dev", "run"}
 
@@ -198,10 +218,148 @@ def send_event(event_type, path, old_hash, new_hash, event_signal):
             raise RuntimeError(f"collector returned HTTP {response.status}")
 
 
+def listening_ports():
+    """Port TCP yang menerima koneksi dari luar host; yang hanya di loopback tidak dihitung."""
+    ports = set()
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path, encoding="ascii") as stream:
+                rows = stream.readlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            if len(fields) < 4 or fields[3] != "0A":
+                continue
+            address, port = fields[1].rsplit(":", 1)
+            # Alamat IPv4 tersimpan terbalik per byte, jadi 127.x.x.x berakhir dengan 7F.
+            if address.endswith("7F") or address == "00000000000000000000000001000000":
+                continue
+            ports.add(int(port, 16))
+    return sorted(ports)[:MAX_REPORTED_PORTS]
+
+
+class LogFollower:
+    """Membaca baris baru sebuah log, dimulai dari akhir file, dan tahan terhadap rotasi."""
+
+    def __init__(self, path):
+        self.path = path
+        self.inode = None
+        self.offset = 0
+        self.partial = b""
+        try:
+            metadata = os.stat(path)
+            self.inode, self.offset = metadata.st_ino, metadata.st_size
+        except OSError:
+            pass
+
+    def read_lines(self):
+        try:
+            metadata = os.stat(self.path)
+        except OSError:
+            return []
+        if metadata.st_ino != self.inode or metadata.st_size < self.offset:
+            self.inode, self.offset, self.partial = metadata.st_ino, 0, b""
+        if metadata.st_size == self.offset:
+            return []
+        with open(self.path, "rb") as stream:
+            stream.seek(self.offset)
+            data = stream.read()
+        self.offset += len(data)
+        lines = (self.partial + data).split(b"\n")
+        self.partial = lines.pop()
+        return [line.decode("utf-8", "replace") for line in lines]
+
+
+def valid_ip(value):
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_auth_line(line):
+    accepted = SSH_ACCEPTED.search(line)
+    if accepted:
+        method, user, address = accepted.groups()
+        if method in TRUSTED_SSH_METHODS or not valid_ip(address):
+            return None
+        return {"port": SSH_PORT, "actor": valid_ip(address), "user": user, "success": True}
+    failed = SSH_FAILED.search(line)
+    if failed and valid_ip(failed.group(2)):
+        return {"port": SSH_PORT, "actor": valid_ip(failed.group(2)), "user": failed.group(1), "success": False}
+    return None
+
+
+def parse_web_line(line):
+    match = WEB_REQUEST.match(line)
+    if not match:
+        return None
+    remote, method, target, status, forwarded = match.groups()
+    actor = valid_ip((forwarded or "").split(",", 1)[0]) or valid_ip(remote)
+    path = target.split("?", 1)[0]
+    if not actor:
+        return None
+    if method == "POST" and path == "/wp-login.php" and status in ("200", "302"):
+        return {"port": WEB_PORT, "actor": actor, "user": "wp-login", "success": status == "302"}
+    if path.startswith("/wp-content/uploads/") and path.endswith(".php") and status == "200":
+        return {"port": WEB_PORT, "actor": actor, "user": "upload-php", "success": True}
+    return None
+
+
+def send_login_event(login):
+    payload = {
+        "host_id": HOST_ID,
+        "type": "alert",
+        "actor": login["actor"],
+        "action": "login",
+        "path": f"port-{login['port']}/{login['user']}"[:256],
+        "severity": "suspicious",
+        "status": "allowed" if login["success"] else "blocked",
+        "port": login["port"],
+    }
+    request = urllib.request.Request(
+        PATROL_EVENT_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        if response.status != 202:
+            raise RuntimeError(f"patrol event returned HTTP {response.status}")
+
+
+def login_watch_loop():
+    followers = [
+        (LogFollower(path), parser)
+        for path, parser in ((AUTH_LOG, parse_auth_line), (WEB_LOG, parse_web_line))
+        if path
+    ]
+    last_failed = {}
+    while True:
+        time.sleep(LOGIN_POLL_SECONDS)
+        for follower, parser in followers:
+            for line in follower.read_lines():
+                login = parser(line)
+                if login is None:
+                    continue
+                key = (login["actor"], login["port"])
+                now = time.monotonic()
+                if not login["success"]:
+                    if now - last_failed.get(key, -FAILED_LOGIN_INTERVAL) < FAILED_LOGIN_INTERVAL:
+                        continue
+                    last_failed[key] = now
+                try:
+                    send_login_event(login)
+                except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as error:
+                    print(f"{HOST_ID}: login event failed: {error}", flush=True)
+
+
 def send_heartbeat():
     payload = {
         "host_id": HOST_ID,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "ports": listening_ports(),
     }
     request = urllib.request.Request(
         HEARTBEAT_URL,
@@ -260,6 +418,7 @@ def save_state(current):
 def main():
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     threading.Thread(target=inventory_loop, daemon=True).start()
+    threading.Thread(target=login_watch_loop, daemon=True).start()
     previous = load_state()
     last_snapshot_attempt = 0.0
     if previous is None:

@@ -8,7 +8,7 @@
 const patrol = {
   files: [], events: [], demoEvents: [], selected: null, demo: false, paused: false,
   speed: 1, filter: "all", source: null, demoTimer: null, demoCycle: 0, demoKeyIdx: 0, layout: [],
-  seen: new Set(), primed: false, analysis: {}, incidentHost: "server-a",
+  seen: new Set(), primed: false, analysis: {}, incidentHost: "server-a", ports: {}, attackVector: "ssh",
 };
 const canvas = document.querySelector("#patrol-canvas");
 const ctx = canvas.getContext("2d", { alpha: false });
@@ -179,17 +179,28 @@ function refreshPatrol() {
 
 /* ───────────────────────── world geometry ───────────────────────── */
 const WORLD_W = 900;
+const FILE_COLS = 6, FILE_COL_W = 64, FILE_ROW_H = 56;
 function worldHeight() {
-  const rows = Math.ceil(Math.max(1, ...hosts.map((h) => patrol.layout.filter((f) => f.host_id === h).length || patrol.files.filter((f) => f.host_id === h).length)) / 4);
-  return Math.max(540, 300 + rows * 77);
+  const rows = Math.ceil(Math.max(1, ...hosts.map((h) => patrol.layout.filter((f) => f.host_id === h).length || patrol.files.filter((f) => f.host_id === h).length)) / FILE_COLS);
+  return Math.max(540, 300 + rows * FILE_ROW_H);
 }
 function roomRect(host) {
   const h = worldHeight();
   return { x: host === "server-b" ? 462 : 28, y: 70, w: 410, h: h - 70 - 112 };
 }
-const doorOf = (host) => { const r = roomRect(host); return { x: r.x + r.w / 2, y: r.y + r.h }; };
+/* Satu pintu untuk tiap port terbuka yang dilaporkan agent. Pintu 80 menjadi pintu utama insiden. */
+const PORT_NAMES = { 21: "FTP", 22: "SSH", 25: "SMTP", 53: "DNS", 80: "HTTP", 443: "HTTPS", 3306: "MYSQL", 8080: "APP", 8091: "WORKER" };
+const MAX_DOORS = 6;
+function doorsOf(host) {
+  const r = roomRect(host), open = patrol.ports[host] || [];
+  const ports = open.length ? open.slice(0, MAX_DOORS) : [80];
+  const gap = r.w / (ports.length + 1), half = Math.min(32, gap / 2 - 5);
+  return ports.map((port, i) => ({ port, half, x: r.x + gap * (i + 1), y: r.y + r.h }));
+}
+const doorOf = (host) => { const doors = doorsOf(host); return doors.find((d) => d.port === 80) || doors[0]; };
+const doorFor = (host, port) => doorsOf(host).find((d) => d.port === port) || doorOf(host);
 const roadY = () => worldHeight() - 44;
-const postOf = (host) => { const d = doorOf(host); return { x: d.x - 112, y: d.y + 36 }; };
+const postOf = (host) => { const r = roomRect(host); return { x: r.x + 30, y: r.y + r.h + 36 }; };
 const hubPos = { x: 450, y: 30 };
 const cableCut = (host) => ({ x: doorOf(host).x, y: 46 });
 
@@ -202,8 +213,8 @@ function layoutFiles() {
     const extra = [...fstate.keys()].filter((k) => k.startsWith(`${host}:`) && !files.some((f) => fkey(host, f.path) === k))
       .map((k) => ({ host_id: host, path: k.slice(host.length + 1), virtual: true }));
     [...files, ...extra].forEach((file, index) => {
-      const col = index % 4, row = Math.floor(index / 4);
-      list.push({ ...file, x: room.x + 70 + col * 88, y: room.y + 130 + row * 77 });
+      const col = index % FILE_COLS, row = Math.floor(index / FILE_COLS);
+      list.push({ ...file, x: room.x + 45 + col * FILE_COL_W, y: room.y + 120 + row * FILE_ROW_H });
       known.add(fkey(host, file.path));
     });
   }
@@ -334,7 +345,7 @@ let thiefSeq = 0;
 function makeScene(host) {
   return {
     host, token: 0, runId: null, ignored: null, vis: null, visSince: 0, queue: [], seen: new Set(), stageTs: {},
-    shutter: 0, shutTarget: 0, cut: 0, cutTarget: 0, door: 0, alarm: false, banner: null, thief: null,
+    shutter: 0, shutTarget: 0, cut: 0, cutTarget: 0, doorOpen: {}, doorAlert: {}, alarm: false, banner: null, thief: null,
     sealed: false, backend: "UNKNOWN", ended: true, demoRun: false, progressMs: 0, repairStart: 0, delayMs: 0,
     cutFx: false, joinFx: false, run: null,
   };
@@ -364,7 +375,7 @@ function trapThief(th) {
 }
 function thiefLeave(th) {
   if (th.dead) return;
-  const D = doorOf(th.host), side = sideOf(th.host), pose = th.carry ? "carry" : "run";
+  const D = doorFor(th.host, th.doorPort), side = sideOf(th.host), pose = th.carry ? "carry" : "run";
   th.leaving = true; th.loop = null; th.stop();
   th.go(D.x, D.y - 26, 130, pose).go(D.x, D.y + 12, 130, pose)
     .call((a) => { a.inside = false; if (a.carry) { popup(D.x, D.y - 26, "EXFIL!", "#e0584a", 12); } })
@@ -414,22 +425,32 @@ function thiefWork(th, ev, action) {
   th.call(() => thiefNext(th));
 }
 function spawnThief(host, id, ev, action, opts = {}) {
-  const sc = scene[host], D = doorOf(host), side = sideOf(host);
+  const sc = scene[host], D = doorFor(host, opts.port), side = sideOf(host);
   if (!sc) return null;
-  const existing = thiefList().find((t) => t.host === host && t.id === id && !t.leaving && !t.ko);
+  const same = thiefList().filter((t) => t.host === host && t.id === id && !t.leaving && !t.ko);
+  const existing = same.find((t) => !t.denied);
   if (existing) { existing.more.push({ ev, action }); return existing; }
+  if (action === "denied" && same.length) return same[0];
   if (thiefList().length >= 8) return null;
   const th = new Actor("thief", host, clamp(D.x + side * 150, 20, 880), roadY(), {
-    id, uid: ++thiefSeq, more: [], lurk: Boolean(opts.lurk), tag: cleanText(opts.tag || id, 15),
+    id, uid: ++thiefSeq, more: [], lurk: Boolean(opts.lurk), tag: cleanText(opts.tag || id, 15), doorPort: D.port,
   });
   thieves.set(th.uid, th);
   th.go(D.x, roadY(), 115, "walk");
   if (action === "denied" || sc.shutTarget > 0.5) {
-    th.go(D.x, D.y + 16, 95, "sneak").call((a) => { shake(120); a.say("Terkunci!", 1400, "bad"); popup(D.x, D.y + 2, "DENIED ✕", "#e0584a", 12); })
+    th.denied = true;
+    th.go(D.x, D.y + 16, 95, "sneak").call((a) => { sc.doorAlert[D.port] = sim.t; shake(120); a.say("Terkunci!", 1400, "bad"); popup(D.x, D.y + 2, "DENIED ✕", "#e0584a", 12); })
       .wait(700, "panic").call((a) => { a.leaving = true; }).go(D.x, roadY(), 140, "run").go(side < 0 ? -50 : 950, roadY(), 150, "run").call((a) => { a.dead = true; });
     return th;
   }
-  th.go(D.x, D.y + 12, 95, "sneak").go(D.x, D.y - 26, 80, "sneak").call((a) => { a.inside = true; });
+  th.go(D.x, D.y + 12, 95, "sneak").go(D.x, D.y - 26, 80, "sneak").call((a) => {
+    a.inside = true;
+    if (!opts.port) return;
+    sc.doorAlert[D.port] = sim.t;
+    popup(D.x, D.y - 44, `MASUK :${D.port}`, "#e0584a", 13);
+    ring(D.x, D.y - 10, "#e0584a", 800, 40);
+    a.say(`Masuk lewat ${PORT_NAMES[D.port] || D.port}`, 2200, "bad");
+  });
   thiefWork(th, ev, action);
   return th;
 }
@@ -762,11 +783,17 @@ function ingestLive(event) {
     if (sev === "safe") { scanFlash.set(fkey(host, event.path), sim.t); return; }
     if (incidentActive(host)) return;
     const action = event.type === "alert" && event.action === "read" ? "plant" : event.action;
+    const inside = thiefList().find((t) => t.host === host && t.inside && !t.leaving && !t.ko);
+    if (inside) {
+      if (inside.loop) { inside.loop = null; inside.stop(); thiefWork(inside, event, action); }
+      else inside.more.push({ ev: event, action });
+      return;
+    }
     spawnThief(host, "fim", event, action, { lurk: Boolean(patrol.analysis.auto_repair_enabled), tag: "INTRUDER" });
     return;
   }
   if (incidentActive(host)) return;
-  spawnThief(host, event.actor, event, event.status === "blocked" ? "denied" : event.action);
+  spawnThief(host, event.actor, event, event.status === "blocked" ? "denied" : event.action, { port: event.port, lurk: event.action === "login" });
 }
 function makeDemoEvent(actor, host, action, severity, path, offset) {
   return {
@@ -813,7 +840,7 @@ async function launchAttack(host) {
   updateAttackButton();
   attackNotice("");
   try {
-    const response = await fetch(`/v1/lab/attack/${host}`, { method: "POST" });
+    const response = await fetch(`/v1/lab/attack/${host}?vector=${patrol.attackVector}`, { method: "POST" });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(ATTACK_ERRORS[body.error] || body.error || `HTTP ${response.status}`);
     patrol.fastUntil = Date.now() + 60000;
@@ -874,9 +901,12 @@ function paintStatic(g) {
   g.font = "bold 10px ui-monospace, Menlo, monospace"; g.fillStyle = "#e8e3c4";
   g.fillText("<< INTERNET", 10, H - 50); g.textAlign = "right"; g.fillText("INTERNET >>", WORLD_W - 10, H - 50); g.textAlign = "left";
   for (const host of hosts) {
-    const R = roomRect(host), D = doorOf(host), P = postOf(host);
-    g.fillStyle = "#a6aa9d"; g.fillRect(D.x - 36, D.y, 72, H - 62 - D.y);
-    g.fillStyle = "#8f948a"; g.fillRect(D.x - 36, D.y, 2, H - 62 - D.y); g.fillRect(D.x + 34, D.y, 2, H - 62 - D.y);
+    const R = roomRect(host), doors = doorsOf(host), P = postOf(host);
+    for (const d of doors) {
+      const w = d.half * 2 + 8, left = d.x - w / 2;
+      g.fillStyle = "#a6aa9d"; g.fillRect(left, d.y, w, H - 62 - d.y);
+      g.fillStyle = "#8f948a"; g.fillRect(left, d.y, 2, H - 62 - d.y); g.fillRect(left + w - 2, d.y, 2, H - 62 - d.y);
+    }
     g.fillStyle = "rgba(0,0,0,.18)"; g.fillRect(R.x + 6, R.y + 6, R.w, R.h);
     g.fillStyle = "#d9caa4"; g.fillRect(R.x, R.y, R.w, R.h);
     for (let y = R.y + 8; y < R.y + R.h - 8; y += 27) for (let x = R.x + 8; x < R.x + R.w - 8; x += 27) {
@@ -884,13 +914,22 @@ function paintStatic(g) {
     }
     g.fillStyle = "#2b3f4c";
     g.fillRect(R.x, R.y, R.w, 8); g.fillRect(R.x, R.y, 8, R.h); g.fillRect(R.x + R.w - 8, R.y, 8, R.h);
-    g.fillRect(R.x, R.y + R.h - 8, R.w / 2 - 34, 8); g.fillRect(D.x + 34, R.y + R.h - 8, R.w / 2 - 34, 8);
+    g.fillRect(R.x, R.y + R.h - 8, R.w, 8);
     g.fillStyle = "#4a6677"; g.fillRect(R.x + 8, R.y + 8, R.w - 16, 2); g.fillRect(R.x + 8, R.y + 8, 2, R.h - 16); g.fillRect(R.x + R.w - 10, R.y + 8, 2, R.h - 16);
     g.fillStyle = "#223845"; g.fillRect(R.x + 8, R.y + 10, R.w - 16, 32);
     g.fillStyle = "#f6f0df"; g.font = "bold 13px ui-monospace, Menlo, monospace"; g.fillText(`${HOST_LABEL[host].toUpperCase()} · /data`, R.x + 20, R.y + 31);
-    g.fillStyle = "#9a9d92"; g.fillRect(D.x - 34, D.y - 8, 68, 8);
-    g.fillStyle = "#d9caa4"; g.fillRect(D.x - 32, D.y - 7, 64, 6);
-    g.fillStyle = "#c8c2ad"; g.fillRect(D.x - 32, D.y - 1, 64, 1);
+    for (const d of doors) {
+      const w = d.half * 2;
+      g.fillStyle = "#9a9d92"; g.fillRect(d.x - d.half - 2, d.y - 8, w + 4, 8);
+      g.fillStyle = "#d9caa4"; g.fillRect(d.x - d.half, d.y - 7, w, 6);
+      g.fillStyle = "#c8c2ad"; g.fillRect(d.x - d.half, d.y - 1, w, 1);
+      const name = PORT_NAMES[d.port] || "PORT", plate = Math.max(40, Math.min(w + 4, 60));
+      pill(g, d.x - plate / 2, d.y + 5, plate, 24, "#223845", "#10202b");
+      g.textAlign = "center";
+      g.fillStyle = "#f6f0df"; g.font = "bold 10px ui-monospace, Menlo, monospace"; g.fillText(String(d.port), d.x, d.y + 16);
+      g.fillStyle = "#9ed3e8"; g.font = "bold 7px ui-monospace, Menlo, monospace"; g.fillText(name, d.x, d.y + 25);
+      g.textAlign = "left";
+    }
     // guard booth
     g.fillStyle = "rgba(0,0,0,.2)"; g.fillRect(P.x - 62, P.y - 22, 44, 34);
     g.fillStyle = "#d8d2c0"; g.fillRect(P.x - 64, P.y - 26, 42, 32);
@@ -899,14 +938,14 @@ function paintStatic(g) {
     g.fillStyle = "#8c3a2e"; g.fillRect(P.x - 68, P.y - 26, 50, 2);
     g.fillStyle = "#f6f0df"; g.font = "bold 7px ui-monospace, monospace"; g.fillText("POS SATPAM", P.x - 65, P.y - 27);
     // bushes
-    for (const [bx, by] of [[R.x - 10, R.y + R.h + 4], [R.x + R.w + 10, R.y + R.h + 4], [D.x - 52, D.y + 6], [D.x + 52, D.y + 6]]) {
+    for (const [bx, by] of [[R.x - 10, R.y + R.h + 4], [R.x + R.w + 10, R.y + R.h + 4]]) {
       g.fillStyle = "#4f7c58"; g.beginPath(); g.arc(bx, by, 9, 0, 6.283); g.fill();
       g.fillStyle = "#639a6c"; g.beginPath(); g.arc(bx - 2, by - 2, 5, 0, 6.283); g.fill();
     }
   }
 }
 function ensureBackground(rectW, rectH) {
-  const key = `${canvas.width}x${canvas.height}:${worldHeight()}`;
+  const key = `${canvas.width}x${canvas.height}:${worldHeight()}:${hosts.map((h) => doorsOf(h).map((d) => d.port).join()).join("|")}`;
   if (bg.key === key) return;
   bg.key = key; bg.canvas.width = canvas.width; bg.canvas.height = canvas.height;
   const g = bg.canvas.getContext("2d");
@@ -1000,20 +1039,26 @@ function drawRoomDynamic(host) {
       g.fillStyle = "#4b5d69"; g.fillRect(rx + 20, ry + 7 + s * 11, 24, 2);
     }
   }
-  // door leaves + shutter
-  const open = sc.door, x0 = D.x - 32, lw = 32 * (1 - open * 0.88);
-  g.fillStyle = OUT; g.fillRect(x0 - 1, D.y - 11, 66, 14);
-  g.fillStyle = "#58707f"; g.fillRect(x0, D.y - 10, lw, 12); g.fillRect(D.x + 32 - lw, D.y - 10, lw, 12);
-  g.fillStyle = "#9ed3e8"; if (lw > 12) { g.fillRect(x0 + 4, D.y - 7, lw - 8, 4); g.fillRect(D.x + 36 - lw, D.y - 7, lw - 8, 4); }
+  // door leaves + shutter, satu per port
   const sh = sc.shutter;
-  if (sh > 0.01) {
-    const hgt = 20 * sh, sy = D.y - 12;
-    g.fillStyle = "rgba(20,20,20,.28)"; g.fillRect(x0 - 3, sy + hgt, 70, 8 * sh);
-    g.fillStyle = OUT; g.fillRect(x0 - 5, sy - 1, 74, hgt + 2);
-    g.fillStyle = "#8b949a"; g.fillRect(x0 - 4, sy, 72, hgt);
-    g.fillStyle = "#6b757b"; for (let yy = sy + 3; yy < sy + hgt; yy += 4) g.fillRect(x0 - 4, yy, 72, 1);
-    if (hgt > 6) hazard(g, x0 - 4, sy + hgt - 5, 72, 5, 1);
-    if (sh > 0.9) { g.fillStyle = Math.floor(t / 300) % 2 ? "#ff4d3d" : "#7a2a24"; g.fillRect(x0 - 2, sy + 2, 4, 4); g.fillRect(x0 + 62, sy + 2, 4, 4); }
+  for (const d of doorsOf(host)) {
+    const open = sc.doorOpen[d.port] || 0, w = d.half * 2, x0 = d.x - d.half, lw = d.half * (1 - open * 0.88);
+    g.fillStyle = OUT; g.fillRect(x0 - 1, d.y - 11, w + 2, 14);
+    g.fillStyle = "#58707f"; g.fillRect(x0, d.y - 10, lw, 12); g.fillRect(d.x + d.half - lw, d.y - 10, lw, 12);
+    g.fillStyle = "#9ed3e8"; if (lw > 12) { g.fillRect(x0 + 4, d.y - 7, lw - 8, 4); g.fillRect(d.x + d.half + 4 - lw, d.y - 7, lw - 8, 4); }
+    if (sh > 0.01) {
+      const hgt = 20 * sh, sy = d.y - 12;
+      g.fillStyle = "rgba(20,20,20,.28)"; g.fillRect(x0 - 3, sy + hgt, w + 6, 8 * sh);
+      g.fillStyle = OUT; g.fillRect(x0 - 5, sy - 1, w + 10, hgt + 2);
+      g.fillStyle = "#8b949a"; g.fillRect(x0 - 4, sy, w + 8, hgt);
+      g.fillStyle = "#6b757b"; for (let yy = sy + 3; yy < sy + hgt; yy += 4) g.fillRect(x0 - 4, yy, w + 8, 1);
+      if (hgt > 6) hazard(g, x0 - 4, sy + hgt - 5, w + 8, 5, 1);
+      if (sh > 0.9) { g.fillStyle = Math.floor(t / 300) % 2 ? "#ff4d3d" : "#7a2a24"; g.fillRect(x0 - 2, sy + 2, 4, 4); g.fillRect(x0 + w - 2, sy + 2, 4, 4); }
+    }
+    const alertAt = sc.doorAlert[d.port];
+    if (alertAt !== undefined && t - alertAt < 7000 && Math.floor(t / 240) % 2) {
+      g.strokeStyle = "#ff4d3d"; g.lineWidth = 3; g.strokeRect(x0 - 6, d.y - 14, w + 12, 46);
+    }
   }
 }
 function drawLockdown(host) {
@@ -1069,7 +1114,7 @@ function drawFile(f) {
     const k = (t - flashAt) / 1100;
     g.strokeStyle = `rgba(90,170,230,${1 - k})`; g.lineWidth = 2; g.beginPath(); g.arc(x, y, 18 + k * 16, 0, 6.283); g.stroke();
   }
-  const label = baseName(f.path).slice(0, 13);
+  const label = baseName(f.path).slice(0, 10);
   g.textAlign = "center"; g.font = "9px ui-monospace, Menlo, monospace";
   if (st === "stolen" || st === "deleted") {
     const c = st === "stolen" ? "#d98324" : "#c7483b";
@@ -1268,14 +1313,18 @@ function update(dt) {
   runTasks();
   const allActors = [];
   for (const host of hosts) {
-    const sc = scene[host], D = doorOf(host);
+    const sc = scene[host];
     sc.shutter += clamp(sc.shutTarget - sc.shutter, -dt * 0.0011, dt * 0.0011);
     sc.cut += clamp(sc.cutTarget - sc.cut, -dt * 0.0022, dt * 0.0022);
     const c = cableCut(host);
     if (sc.cut > 0.97 && !sc.cutFx) { sc.cutFx = true; sparks(c.x, c.y, 20); ring(c.x, c.y, "#ff8a3d", 650, 26); shake(240); popup(c.x + 40, c.y - 10, "KONEKSI PUTUS", "#ff8a6b", 10); }
     if (sc.cut < 0.03 && sc.cutFx) { sc.cutFx = false; greenSparks(c.x, c.y, 20); ring(c.x, c.y, "#7be3b0", 650, 26); popup(c.x + 40, c.y - 10, "TERSAMBUNG", "#7be3b0", 10); }
-    const near = [police[host], guards[host], ...thiefList().filter((t) => t.host === host)].some((a) => Math.hypot(a.x - D.x, a.y - D.y) < 54 && !a.ko) && sc.shutter < 0.2;
-    sc.door += clamp((near ? 1 : 0) - sc.door, -dt * 0.004, dt * 0.004);
+    const actors = [police[host], guards[host], ...thiefList().filter((t) => t.host === host)].filter((a) => !a.ko);
+    for (const d of doorsOf(host)) {
+      const near = sc.shutter < 0.2 && actors.some((a) => Math.abs(a.x - d.x) < d.half + 12 && Math.abs(a.y - d.y) < 54);
+      const open = sc.doorOpen[d.port] || 0;
+      sc.doorOpen[d.port] = open + clamp((near ? 1 : 0) - open, -dt * 0.004, dt * 0.004);
+    }
     advanceScene(sc);
     updatePolice(host); updateGuard(host);
     allActors.push(police[host], guards[host]);
@@ -1296,8 +1345,7 @@ function update(dt) {
 function draw() {
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
-  const H = worldHeight(), want = clamp(rect.width * H / WORLD_W, 360, 1000);
-  if (Math.abs(parseFloat(canvas.style.height || "0") - want) > 1) { canvas.style.height = `${want}px`; return; }
+  const H = worldHeight();
   const dpr = Math.min(window.devicePixelRatio || 1, 2), pw = Math.round(rect.width * dpr), ph = Math.round(rect.height * dpr);
   const scale = Math.min(rect.width / WORLD_W, rect.height / H);
   view = { scale, ox: (rect.width - WORLD_W * scale) / 2, oy: (rect.height - H * scale) / 2, dpr };
@@ -1459,6 +1507,7 @@ async function pollDashboard() {
     if (!response.ok) return;
     const data = await response.json();
     patrol.analysis = data.analysis || {};
+    patrol.ports = data.ports || {};
     const latest = {};
     for (const run of Array.isArray(data.remediations) ? data.remediations : []) if (!latest[run.host_id]) latest[run.host_id] = run;
     for (const host of hosts) {
@@ -1495,7 +1544,7 @@ function updateIncidentUI() {
 function actorDetail(a) {
   if (a.role === "police") return `Polisi AI · ${HOST_LABEL[a.host]} · patroli ${filesOf(a.host).length} file (SHA-256)`;
   if (a.role === "guard") return `Satpam · ${HOST_LABEL[a.host]} · perbaikan + verifikasi`;
-  return `${a.ko ? "Intruder dilumpuhkan" : "Intruder"} · ${a.tag || a.id} · ${HOST_LABEL[a.host]} · severity ${a.sev || "safe"}`;
+  return `${a.ko ? "Intruder dilumpuhkan" : "Intruder"} · ${a.tag || a.id} · ${HOST_LABEL[a.host]} · port ${a.doorPort} · severity ${a.sev || "safe"}`;
 }
 canvas.addEventListener("click", (event) => {
   const rect = canvas.getBoundingClientRect();
@@ -1553,6 +1602,12 @@ $("#patrol-incident-demo")?.addEventListener("click", () => {
   launchAttack(patrol.incidentHost);
 });
 $("#patrol-incident-host").addEventListener("change", updateAttackButton);
+document.querySelectorAll("#attack-vector button").forEach((button) => {
+  button.addEventListener("click", () => {
+    patrol.attackVector = button.dataset.vector;
+    document.querySelectorAll("#attack-vector button").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+  });
+});
 $("#patrol-pause").addEventListener("click", (event) => {
   patrol.paused = !patrol.paused;
   event.currentTarget.setAttribute("aria-pressed", String(patrol.paused));

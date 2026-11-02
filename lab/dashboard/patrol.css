@@ -20,8 +20,10 @@
 /* Floating Controls */
 .patrol-controls-floating {
   position: absolute;
-  bottom: 20px;
-  left: 20px;
+  top: 12px;
+  bottom: auto;
+  left: 12px;
+  max-width: 190px;
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -37,6 +39,10 @@
   gap: 6px;
   align-items: center;
 }
+.control-group { flex-wrap: wrap; }
+.attack-vector { display: flex; gap: 2px; padding: 2px; background: #1b2631; border: 1px solid #34495e; border-radius: 4px; }
+.attack-vector button { min-height: 30px; padding: 4px 12px; color: var(--text-muted); background: transparent; border: 0; border-radius: 3px; font-size: 12px; font-weight: 700; cursor: pointer; }
+.attack-vector button[aria-pressed="true"] { color: #000; background: var(--accent-teal); }
 .attack-status { max-width: 160px; color: #ff8a7a; font-size: 11px; font-weight: 700; }
 .attack-status:empty { display: none; }
 .control-group select {
@@ -52,11 +58,11 @@
 /* Incident Overlay — Critical Alert */
 .incident-overlay {
   position: absolute;
-  top: auto;
-  bottom: 20px;
+  top: 12px;
+  bottom: auto;
   left: auto;
-  right: 20px;
-  width: min(440px, calc(100% - 40px));
+  right: 12px;
+  width: min(260px, calc(100% - 24px));
   background: rgba(11, 15, 18, 0.92);
   color: #fff;
   padding: 10px 16px;
@@ -64,10 +70,10 @@
   z-index: 110;
   box-shadow: 0 10px 30px rgba(0,0,0,0.6);
   border-left: 6px solid var(--incident-color, var(--accent-red));
-  animation: slideUp 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+  animation: slideDown 0.4s cubic-bezier(0.18, 0.89, 0.32, 1.28);
 }
-@keyframes slideUp {
-  from { transform: translateY(100%); opacity: 0; }
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
 

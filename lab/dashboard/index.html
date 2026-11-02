@@ -135,6 +135,10 @@
               <button id="patrol-pause" class="btn" type="button">Jeda</button>
               <div class="control-group">
                 <select id="patrol-incident-host"><option value="server-a">Server A</option><option value="server-b">Server B</option></select>
+                <div id="attack-vector" class="attack-vector" role="group" aria-label="Jalur serangan">
+                  <button type="button" data-vector="ssh" aria-pressed="true">SSH</button>
+                  <button type="button" data-vector="web" aria-pressed="false">Web</button>
+                </div>
                 <button id="patrol-incident-demo" class="btn btn-alert" type="button">SERANG!</button>
                 <span id="attack-status" class="attack-status" role="status"></span>
               </div>

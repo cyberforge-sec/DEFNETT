@@ -57,6 +57,8 @@ MAX_BODY_BYTES = 64_000_000
 MAX_INVENTORY_DIRECTORIES = 200_000
 MAX_INVENTORY_ENTRIES = 1_000_000
 MAX_LISTING_ENTRIES = 5000
+MAX_OPEN_PORTS = 32
+OPEN_PORTS = {}
 FS_ENTRY_KINDS = {"dir", "file", "link", "other", "virtual"}
 FS_KIND_ORDER = {"dir": 0, "virtual": 1, "link": 2, "file": 3, "other": 4}
 
@@ -176,6 +178,11 @@ def initialize():
                 status TEXT NOT NULL
             )"""
         )
+        patrol_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(patrol_events)")
+        }
+        if "port" not in patrol_columns:
+            connection.execute("ALTER TABLE patrol_events ADD COLUMN port INTEGER")
 
 
 def evaluate(event):
@@ -396,6 +403,8 @@ def request_lab_repair(event_id, host_id, kind="canary"):
 RESTORED_HASHES = {}
 ATTACK_LOCK = threading.Lock()
 ATTACK_SETTLE_SECONDS = 20
+ATTACK_ENTRY_SECONDS = 5
+LAB_ATTACK_PORTS = {"ssh": 22, "web": 80}
 LAST_ATTACK = {}
 
 
@@ -403,12 +412,18 @@ def repair_delay_applies(target):
     return DEMO_REPAIR_HOST in ("all", target)
 
 
-def start_lab_attack(host_id):
-    """Minta worker host target mengubah kunci demo; deteksi dan isolasi berjalan lewat playbook."""
+def start_lab_attack(host_id, vector=None, actor=None):
+    """Minta worker host target mengubah kunci demo; deteksi dan isolasi berjalan lewat playbook.
+
+    vector hanya menentukan pintu yang dilewati intruder di peta; tidak ada serangan
+    nyata ke SSH atau web.
+    """
     if not ENABLE_LAB_AUTOREPAIR:
         raise PermissionError("lab_drain_mode_disabled")
     if host_id not in ALLOWED_HOSTS or host_id not in REMEDIATOR_URLS:
         raise LookupError("unknown_host")
+    if vector is not None and vector not in LAB_ATTACK_PORTS:
+        raise LookupError("unknown_vector")
     survivor = "server-b" if host_id == "server-a" else "server-a"
     with ATTACK_LOCK:
         if any(run["completed_at"] is None for run in remediation_rows(10)) \
@@ -418,6 +433,14 @@ def start_lab_attack(host_id):
             raise RuntimeError("target_not_up")
         if not backend_is_up(survivor):
             raise RuntimeError("survivor_not_healthy")
+        if vector is not None:
+            LAST_ATTACK[host_id] = time.monotonic()
+            store_patrol_event({
+                "type": "alert", "actor": actor, "action": "login", "host_id": host_id,
+                "path": f"simulasi-{vector}", "severity": "suspicious", "status": "allowed",
+                "port": LAB_ATTACK_PORTS[vector],
+            })
+            time.sleep(ATTACK_ENTRY_SECONDS)
         request = urllib.request.Request(
             REMEDIATOR_URLS[host_id].rsplit("/", 1)[0] + "/lab/attack",
             data=json.dumps({"host_id": host_id}).encode("utf-8"),
@@ -797,7 +820,7 @@ def fs_listing(host_id, raw_path="/"):
 
 def store_patrol_event(event):
     allowed_types = {"patrol_check", "access", "alert"}
-    allowed_actions = {"read", "download", "modify", "delete", "denied"}
+    allowed_actions = {"read", "download", "modify", "delete", "denied", "login"}
     allowed_severity = {"safe", "suspicious", "compromised"}
     event_type = event.get("type")
     action = event.get("action")
@@ -833,12 +856,15 @@ def store_patrol_event(event):
     for key in ("hash_old", "hash_new"):
         value = event.get(key)
         hashes.append(value if isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value) else None)
+    port = event.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+        port = None
     with connect() as connection:
         cursor = connection.execute(
             """INSERT INTO patrol_events
-               (ts, type, actor, action, host_id, path, severity, hash_old, hash_new, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (timestamp, event_type, actor, action, host_id, path, severity, hashes[0], hashes[1], status),
+               (ts, type, actor, action, host_id, path, severity, hash_old, hash_new, status, port)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (timestamp, event_type, actor, action, host_id, path, severity, hashes[0], hashes[1], status, port),
         )
         return cursor.lastrowid
 
@@ -995,6 +1021,7 @@ def dashboard_state():
             "by_host": {host: {"status": remediator_health(host)} for host in sorted(ALLOWED_HOSTS)},
         },
         "backends": backend_states(),
+        "ports": OPEN_PORTS,
         "traffic": traffic_state(),
         "agents": agent_states(),
         "remediation": remediations[0] if remediations else None,
@@ -1081,6 +1108,12 @@ class Handler(BaseHTTPRequestHandler):
                 if host_id not in ALLOWED_HOSTS:
                     return self.respond(403, {"error": "unknown_host"})
                 timestamp = datetime.now(timezone.utc).isoformat()
+                ports = payload.get("ports")
+                if isinstance(ports, list):
+                    OPEN_PORTS[host_id] = sorted({
+                        port for port in ports[:MAX_OPEN_PORTS]
+                        if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536
+                    })
                 with connect() as connection:
                     connection.execute(
                         "INSERT INTO agent_status (host_id, last_seen) VALUES (?, ?) "
@@ -1092,9 +1125,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(400, {"error": "invalid_heartbeat"})
 
         if self.path.startswith("/v1/lab/attack/"):
-            host_id = self.path.rsplit("/", 1)[-1]
+            target = urlsplit(self.path)
+            host_id = target.path.rsplit("/", 1)[-1]
+            vector = parse_qs(target.query).get("vector", [None])[0]
             try:
-                result = start_lab_attack(host_id)
+                result = start_lab_attack(host_id, vector, self.client_address[0])
             except PermissionError as error:
                 return self.respond(403, {"error": str(error)})
             except LookupError as error:

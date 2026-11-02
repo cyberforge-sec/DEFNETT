@@ -1,0 +1,18 @@
+# macOS junk
+._*
+.DS_Store
+
+# Arsip duplikat (folder lab/ yang di-push)
+lab.zip
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Docker
+*.log
+
+# Node
+node_modules/

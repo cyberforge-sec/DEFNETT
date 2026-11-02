@@ -1,0 +1,17 @@
+# DEFNETT lab - gateway (VM "Gateway")
+# enp0s8 = NIC1 NAT   (MAC 08:00:27:60:3c:4e) - default route, DNS via DHCP
+# enp0s9 = NIC2 host-only "defnett" (MAC 08:00:27:77:de:09) - static, NO routes
+# NOTE: enp0s8/enp0s9 are the ARM64-guest names of enp0s3/enp0s8; mapped via MAC.
+network:
+  version: 2
+  ethernets:
+    enp0s8:
+      dhcp4: true
+      dhcp6: false
+      accept-ra: false
+    enp0s9:
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      addresses:
+        - 192.168.56.10/24

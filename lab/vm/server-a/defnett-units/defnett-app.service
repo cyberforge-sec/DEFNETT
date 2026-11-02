@@ -1,0 +1,25 @@
+[Unit]
+Description=DEFNETT app server-a :8080
+After=network-online.target server-a.netplan-ready.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=defnett
+Group=defnett
+EnvironmentFile=/etc/defnett/server-a.env
+ExecStart=/usr/bin/python3 /opt/defnett/app.py
+Restart=always
+RestartSec=2
+# hardening padanan compose: read_only, cap_drop ALL, no-new-privileges, tmpfs
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/data
+
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>DEFNETT | Patroli Lab</title>
+    <link rel="stylesheet" href="/dashboard.css">
+    <link rel="stylesheet" href="/patrol.css">
+    <script src="/dashboard.js" defer></script>
+    <script src="/patrol.js" defer></script>
+  </head>
+  <body class="dark-theme">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="DEFNETT, halaman patroli">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>DEFNETT</span>
+      </a>
+      <div class="top-meta">
+        <nav class="dashboard-tabs" role="tablist" aria-label="Tampilan dashboard">
+          <button id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="overview-view">Overview</button>
+          <button id="tab-patrol" type="button" role="tab" aria-selected="false" aria-controls="patrol-view">Patrol</button>
+        </nav>
+        <span id="connection" class="connection" role="status"><span class="status-dot"></span>Menghubungkan…</span>
+        <button id="sidebar-open" class="refresh-button" type="button">Detail</button>
+      </div>
+    </header>
+
+    <div class="dashboard-container">
+      <main class="main-content">
+        <!-- BARIS STATUS RINGKAS (High-level KPIs) -->
+        <div class="kpi-bar">
+          <div class="kpi-item">
+            <span class="kpi-label">MODE</span>
+            <strong id="lab-mode" class="mode-label">-</strong>
+          </div>
+          <div class="kpi-item backend-a">
+            <span class="kpi-label">SERVER A</span>
+            <strong id="chip-backend-a" class="mode-label">?</strong>
+          </div>
+          <div class="kpi-item backend-b">
+            <span class="kpi-label">SERVER B</span>
+            <strong id="chip-backend-b" class="mode-label">?</strong>
+          </div>
+          <div class="kpi-item proxy">
+            <span class="kpi-label">LB</span>
+            <strong id="chip-proxy" class="mode-label">?</strong>
+          </div>
+          <div class="kpi-item safe">
+            <span class="kpi-label">AMAN</span>
+            <strong id="patrol-safe-count">0</strong>
+          </div>
+          <div class="kpi-item suspicious">
+            <span class="kpi-label">RISIKO</span>
+            <strong id="patrol-suspicious-count">0</strong>
+          </div>
+          <div class="kpi-item compromised">
+            <span class="kpi-label">KRITIS</span>
+            <strong id="patrol-compromised-count">0</strong>
+          </div>
+        </div>
+
+        <!-- AREA VISUAL (Peta/Canvas) -->
+        <div class="visual-viewport">
+          <section id="overview-view" class="tab-panel visual-panel" role="tabpanel" aria-labelledby="tab-overview">
+            <div class="topology-container">
+              <svg class="topology" viewBox="0 0 1000 360" role="img">
+                <path class="route telemetry-route route-electric" d="M174 112 C240 112 250 173 324 173 S420 173 473 173" />
+                <path class="route telemetry-route route-electric" d="M174 272 C240 272 250 211 324 211 S420 211 473 211" />
+                <path class="route control-route route-electric" d="M564 174 C625 174 625 112 688 112" />
+                <path id="route-server-a" class="route service-route route-electric" d="M780 112 C850 112 846 176 888 176" />
+                <path id="route-server-b" class="route service-route route-electric" d="M780 112 C852 112 844 278 888 278" />
+                <circle class="route-node" cx="274" cy="143" r="4" />
+                <circle class="route-node" cx="274" cy="241" r="4" />
+                <circle class="route-node control-node" cx="627" cy="142" r="4" />
+                <g class="map-node" id="node-agent-a" transform="translate(38 79)">
+                  <rect class="node-shell" width="136" height="66" rx="8" />
+                  <circle class="node-status" cx="17" cy="19" r="5" />
+                  <text class="node-kicker" x="31" y="22">AGENT</text>
+                  <text class="node-title" x="16" y="46">Server A</text>
+                  <text class="node-detail" id="agent-a-state" x="16" y="59">-</text>
+                </g>
+                <g class="map-node" id="node-agent-b" transform="translate(38 239)">
+                  <rect class="node-shell" width="136" height="66" rx="8" />
+                  <circle class="node-status" cx="17" cy="19" r="5" />
+                  <text class="node-kicker" x="31" y="22">AGENT</text>
+                  <text class="node-title" x="16" y="46">Server B</text>
+                  <text class="node-detail" id="agent-b-state" x="16" y="59">-</text>
+                </g>
+                <g class="map-node collector-node" transform="translate(473 151)">
+                  <rect class="node-shell" width="112" height="82" rx="10" />
+                  <circle class="node-status" cx="17" cy="20" r="5" />
+                  <text class="node-kicker" x="31" y="23">COLLECTOR</text>
+                  <text class="node-title" x="14" y="52">FIM</text>
+                </g>
+                <g class="map-node" id="node-proxy" transform="translate(688 79)">
+                  <rect class="node-shell" width="132" height="66" rx="8" />
+                  <circle class="node-status" cx="17" cy="19" r="5" />
+                  <text class="node-kicker" x="31" y="22">LOAD BALANCER</text>
+                  <text class="node-title" x="16" y="46">HAProxy</text>
+                  <text class="node-detail" id="proxy-state" x="16" y="59">-</text>
+                </g>
+                <g class="map-node backend-node" id="node-server-a" transform="translate(888 142)">
+                  <rect class="node-shell" width="94" height="66" rx="8" />
+                  <circle class="node-status" cx="15" cy="19" r="5" />
+                  <text class="node-title" x="13" y="43">Server A</text>
+                  <text class="node-detail" id="backend-a-state" x="13" y="58">?</text>
+                </g>
+                <g class="map-node backend-node" id="node-server-b" transform="translate(888 244)">
+                  <rect class="node-shell" width="94" height="66" rx="8" />
+                  <circle class="node-status" cx="15" cy="19" r="5" />
+                  <text class="node-title" x="13" y="43">Server B</text>
+                  <text class="node-detail" id="backend-b-state" x="13" y="58">?</text>
+                </g>
+              </svg>
+            </div>
+          </section>
+
+          <section id="patrol-view" class="tab-panel visual-panel" role="tabpanel" aria-labelledby="tab-patrol" hidden>
+            <div id="patrol-incident" class="incident-overlay" hidden>
+              <div class="incident-head">
+                <strong id="incident-title">Insiden</strong>
+                <span id="incident-lb" class="incident-lb"></span>
+                <span id="incident-timer" class="incident-timer"></span>
+              </div>
+              <ol class="incident-steps" aria-hidden="true">
+                <li data-stage="DETECTED"></li><li data-stage="ISOLATING"></li><li data-stage="ISOLATED"></li><li data-stage="REPAIRING"></li><li data-stage="VERIFYING"></li><li data-stage="REJOINING"></li><li data-stage="REPAIRED"></li>
+              </ol>
+            </div>
+            <div class="canvas-frame">
+              <canvas id="patrol-canvas"></canvas>
+            </div>
+            <div class="patrol-controls-floating">
+              <button id="patrol-demo-toggle" class="btn btn-primary" type="button">Demo</button>
+              <button id="patrol-pause" class="btn" type="button">Jeda</button>
+              <div class="control-group">
+                <select id="patrol-incident-host"><option value="server-a">Server A</option><option value="server-b">Server B</option></select>
+                <button id="patrol-incident-demo" class="btn btn-alert" type="button">SERANG!</button>
+                <span id="attack-status" class="attack-status" role="status"></span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="load-error" class="notice error-notice" role="alert" hidden>
+          <strong>Collector tidak dapat dijangkau.</strong>
+        </div>
+      </main>
+
+      <!-- SIDEBAR DETAIL (Drawer) -->
+      <aside class="details-sidebar" id="details-sidebar">
+        <div class="sidebar-header">
+          <h3>Rincian Lab</h3>
+          <button class="sidebar-close" id="sidebar-close" aria-label="Tutup sidebar">×</button>
+        </div>
+
+        <div class="sidebar-tabs">
+          <button class="s-tab active" data-target="s-events">Events</button>
+          <button class="s-tab" data-target="s-files">File</button>
+          <button class="s-tab" data-target="s-playbook">Playbook</button>
+          <button class="s-tab" data-target="s-traffic">Trafik</button>
+        </div>
+
+        <div class="sidebar-content">
+          <!-- Panel Events -->
+          <div id="s-events" class="s-panel active">
+            <div class="panel-header">
+              <select id="host-filter"><option value="all">Semua Host</option><option value="server-a">A</option><option value="server-b">B</option></select>
+              <select id="patrol-filter"><option value="all">Semua Level</option><option value="suspicious">Suspicious</option><option value="compromised">Compromised</option></select>
+            </div>
+            <div id="event-list" class="event-list-compact"></div>
+            <ol id="patrol-events" class="patrol-events-visual" hidden></ol>
+          </div>
+
+          <!-- Panel File -->
+          <div id="s-files" class="s-panel">
+            <div class="panel-header">
+              <select id="fs-host" aria-label="Server"><option value="server-a">Server A</option><option value="server-b">Server B</option></select>
+              <button id="fs-refresh" class="btn" type="button">Muat ulang</button>
+            </div>
+            <nav id="fs-breadcrumb" class="fs-breadcrumb" aria-label="Lokasi folder"></nav>
+            <div id="fs-status" class="fs-status" role="status"></div>
+            <ul id="fs-list" class="fs-list"></ul>
+          </div>
+
+          <!-- Panel Playbook -->
+          <div id="s-playbook" class="s-panel">
+            <div class="playbook-status">
+              <div id="repair-mode" class="badge">Mode</div>
+              <div id="remediator-health" class="badge">Worker</div>
+              <div id="repair-status" class="status-indicator">Status</div>
+            </div>
+            <strong id="repair-headline">Playbook</strong>
+            <p id="repair-detail" class="small-text"></p>
+            <dl id="repair-facts" class="repair-facts-compact" hidden>
+              <dt>File</dt><dd id="repair-file">-</dd>
+              <dt>Lain</dt><dd id="repair-survivor">-</dd>
+              <dt>Bukti</dt><dd id="repair-quarantine">-</dd>
+              <dt>Start</dt><dd id="repair-started">-</dd>
+            </dl>
+            <ol id="repair-steps" class="repair-timeline">
+              <li data-stage="DETECTED"><span class="step-index">1</span><span>Terdeteksi</span></li>
+              <li data-stage="ISOLATING"><span class="step-index">2</span><span>Isolasi</span></li>
+              <li data-stage="ISOLATED"><span class="step-index">3</span><span>Keluar rotasi</span></li>
+              <li data-stage="REPAIRING"><span class="step-index">4</span><span>Perbaikan</span></li>
+              <li data-stage="VERIFYING"><span class="step-index">5</span><span>Verifikasi</span></li>
+              <li data-stage="REJOINING"><span class="step-index">6</span><span>Health check</span></li>
+              <li data-stage="REPAIRED"><span class="step-index">7</span><span>Pulih</span></li>
+              <li data-stage="FAILED"><span class="step-index">!</span><span>Gagal</span></li>
+            </ol>
+          </div>
+
+          <!-- Panel Trafik -->
+          <div id="s-traffic" class="s-panel">
+            <div class="traffic-grid-sidebar">
+              <div class="traffic-card" data-phase="before"><div class="traffic-ok">0</div><div class="traffic-fail">0</div><div class="traffic-a">0</div><div class="traffic-b">0</div><div class="traffic-rate"></div></div>
+              <div class="traffic-card" data-phase="during"><div class="traffic-ok">0</div><div class="traffic-fail">0</div><div class="traffic-a">0</div><div class="traffic-b">0</div><div class="traffic-rate"></div></div>
+              <div class="traffic-card" data-phase="after"><div class="traffic-ok">0</div><div class="traffic-fail">0</div><div class="traffic-a">0</div><div class="traffic-b">0</div><div class="traffic-rate"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-footer">
+          <div id="patrol-detail" class="detail-inspector"></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Hidden / Legacy element placeholders (untuk JS compatibility) -->
+    <div hidden>
+      <span id="patrol-source-status"></span>
+      <span id="patrol-actor-count">0</span><span id="patrol-file-count">0</span><span id="patrol-event-count">0</span>
+      <div id="patrol-files"></div><div id="patrol-actors"></div>
+      <select id="patrol-speed"><option value="1">1x</option></select>
+    </div>
+  </body>
+</html>

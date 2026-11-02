@@ -1,0 +1,24 @@
+[Unit]
+Description=DEFNETT fim agent server-a
+After=network-online.target server-a.netplan-ready.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=defnett
+Group=defnett
+EnvironmentFile=/etc/defnett/server-a.env
+ExecStart=/usr/bin/python3 /opt/defnett/agent.py
+Restart=always
+RestartSec=2
+# hardening padanan compose: read_only, cap_drop ALL, no-new-privileges, tmpfs
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+ReadWritePaths=/state
+
+[Install]
+WantedBy=multi-user.target

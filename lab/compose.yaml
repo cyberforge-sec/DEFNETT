@@ -1,0 +1,247 @@
+services:
+  server-a:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/app.py"]
+    environment:
+      HOST_ID: server-a
+      PATROL_PUBLIC_FILES: "index.txt,etc/hostname,etc/hosts,etc/os-release,etc/motd,home/kartika/notes/note-01.txt,home/kartika/notes/note-02.txt,home/kartika/notes/note-03.txt,home/kartika/notes/note-04.txt,home/kartika/notes/note-05.txt,home/kartika/notes/note-06.txt,home/kartika/notes/note-07.txt,home/kartika/notes/note-08.txt,home/kartika/notes/note-09.txt,home/kartika/notes/note-10.txt,home/kartika/notes/note-11.txt,home/kartika/notes/note-12.txt,home/kartika/notes/note-13.txt,home/kartika/notes/note-14.txt,home/kartika/notes/note-15.txt,home/kartika/notes/note-16.txt,home/kartika/notes/note-17.txt,home/kartika/notes/note-18.txt,home/kartika/notes/note-19.txt,home/kartika/notes/note-20.txt,home/kartika/notes/note-21.txt,home/kartika/notes/note-22.txt,home/kartika/notes/note-23.txt,home/kartika/notes/note-24.txt,home/kartika/notes/note-25.txt,home/kartika/notes/note-26.txt,home/kartika/notes/note-27.txt,home/kartika/notes/note-28.txt,home/kartika/notes/note-29.txt,home/kartika/notes/note-30.txt,home/kartika/reports/audit-01.txt,home/kartika/reports/audit-02.txt"
+    volumes:
+      - server_a_data:/data
+    networks:
+      - serving
+      - telemetry
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server-b:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/app.py"]
+    environment:
+      HOST_ID: server-b
+      PATROL_PUBLIC_FILES: "index.txt,etc/hostname,etc/hosts,etc/os-release,etc/motd,home/kartika/notes/note-01.txt,home/kartika/notes/note-02.txt,home/kartika/notes/note-03.txt,home/kartika/notes/note-04.txt,home/kartika/notes/note-05.txt,home/kartika/notes/note-06.txt,home/kartika/notes/note-07.txt,home/kartika/notes/note-08.txt,home/kartika/notes/note-09.txt,home/kartika/notes/note-10.txt,home/kartika/notes/note-11.txt,home/kartika/notes/note-12.txt,home/kartika/notes/note-13.txt,home/kartika/notes/note-14.txt,home/kartika/notes/note-15.txt,home/kartika/notes/note-16.txt,home/kartika/notes/note-17.txt,home/kartika/notes/note-18.txt,home/kartika/notes/note-19.txt,home/kartika/notes/note-20.txt,home/kartika/notes/note-21.txt,home/kartika/notes/note-22.txt,home/kartika/notes/note-23.txt,home/kartika/notes/note-24.txt,home/kartika/notes/note-25.txt,home/kartika/notes/note-26.txt,home/kartika/notes/note-27.txt,home/kartika/notes/note-28.txt,home/kartika/notes/note-29.txt,home/kartika/notes/note-30.txt,home/kartika/reports/audit-01.txt,home/kartika/reports/audit-02.txt"
+    volumes:
+      - server_b_data:/data
+    networks:
+      - serving
+      - telemetry
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  collector:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/collector.py"]
+    environment:
+      DB_PATH: /evidence/events.sqlite3
+      ALLOWED_HOSTS: server-a,server-b
+      REMEDIATOR_URL_SERVER_A: http://remediator-a:8091/v1/repair
+      REMEDIATOR_URL_SERVER_B: http://remediator-b:8091/v1/repair
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - evidence_data:/evidence
+    networks:
+      - telemetry
+      - host_access
+      - response_control
+      - repair_a
+      - repair_b
+    depends_on:
+      remediator-a:
+        condition: service_healthy
+      remediator-b:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  remediator-a:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/remediator.py"]
+    environment:
+      TARGET_ROOT: /target
+      QUARANTINE_ROOT: /quarantine/server-a
+      TARGET_HOST_ID: server-a
+    volumes:
+      - server_a_data:/target
+      - quarantine_a_data:/quarantine
+      - master_a_data:/master
+    networks:
+      - repair_a
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  remediator-b:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/remediator.py"]
+    environment:
+      TARGET_ROOT: /target
+      QUARANTINE_ROOT: /quarantine/server-b
+      TARGET_HOST_ID: server-b
+    volumes:
+      - server_b_data:/target
+      - quarantine_b_data:/quarantine
+      - master_b_data:/master
+    networks:
+      - repair_b
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  agent-a:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/agent.py"]
+    environment:
+      HOST_ID: server-a
+      WATCH_ROOT: /watched
+      STATE_PATH: /state/baseline.json
+      COLLECTOR_URL: http://collector:8090/v1/events
+      POLL_SECONDS: "3"
+    volumes:
+      - server_a_data:/watched:ro
+      - agent_a_state:/state
+    networks:
+      - telemetry
+    depends_on:
+      server-a:
+        condition: service_healthy
+      collector:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  agent-b:
+    build: .
+    image: defnett-lab:local
+    command: ["/opt/defnett/agent.py"]
+    environment:
+      HOST_ID: server-b
+      WATCH_ROOT: /watched
+      STATE_PATH: /state/baseline.json
+      COLLECTOR_URL: http://collector:8090/v1/events
+      POLL_SECONDS: "3"
+    volumes:
+      - server_b_data:/watched:ro
+      - agent_b_state:/state
+    networks:
+      - telemetry
+    depends_on:
+      server-b:
+        condition: service_healthy
+      collector:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  haproxy:
+    build: ./haproxy
+    image: defnett-haproxy:local
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - serving
+      - host_access
+      - response_control
+    depends_on:
+      server-a:
+        condition: service_healthy
+      server-b:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  serving:
+    internal: true
+  telemetry:
+    internal: true
+  host_access:
+    driver: bridge
+  response_control:
+    internal: true
+  repair_a:
+    internal: true
+  repair_b:
+    internal: true
+
+volumes:
+  server_a_data:
+  server_b_data:
+  agent_a_state:
+  agent_b_state:
+  evidence_data:
+  quarantine_a_data:
+  quarantine_b_data:
+  master_a_data:
+  master_b_data:

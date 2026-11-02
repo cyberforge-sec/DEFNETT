@@ -34,6 +34,7 @@ INVENTORY_RETRY_SECONDS = 30
 INVENTORY_URL = os.environ.get(
     "INVENTORY_URL", COLLECTOR_URL.rsplit("/", 1)[0] + "/patrol/inventory"
 )
+API_TOKEN = os.environ.get("LAB_API_TOKEN", "")
 PATROL_EVENT_URL = os.environ.get(
     "PATROL_EVENT_URL", COLLECTOR_URL.rsplit("/", 2)[0] + "/api/patrol/events"
 )
@@ -54,6 +55,13 @@ WEB_REQUEST = re.compile(
 MAX_REPORTED_PORTS = 32
 CANARY = b"DEFNETT-LAB-MALWARE-CANARY"
 VIRTUAL_ROOTS = {"proc", "sys", "dev", "run"}
+
+
+def api_headers(extra=None):
+    headers = {"Content-Type": "application/json", **(extra or {})}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
+    return headers
 
 
 def snapshot():
@@ -175,7 +183,7 @@ def send_inventory(directories):
     request = urllib.request.Request(
         INVENTORY_URL,
         data=gzip.compress(json.dumps(payload).encode("utf-8"), compresslevel=5),
-        headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
+        headers=api_headers({"Content-Encoding": "gzip"}),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=COLLECTOR_TIMEOUT) as response:
@@ -194,9 +202,10 @@ def inventory_loop():
         time.sleep(delay)
 
 
-def send_event(event_type, path, old_hash, new_hash, event_signal):
+def send_event(event_type, path, old_hash, new_hash, event_signal, detect_seconds=None):
     event_path = f"/{path}" if WATCH_ROOT.resolve() == Path("/") else path
     event = {
+        "detect_seconds": detect_seconds,
         "host_id": HOST_ID,
         "source": "lab-fim-agent",
         "event_type": event_type,
@@ -210,7 +219,7 @@ def send_event(event_type, path, old_hash, new_hash, event_signal):
     request = urllib.request.Request(
         COLLECTOR_URL,
         data=json.dumps(event).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=api_headers(),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=COLLECTOR_TIMEOUT) as response:
@@ -321,7 +330,7 @@ def send_login_event(login):
     request = urllib.request.Request(
         PATROL_EVENT_URL,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=api_headers(),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=5) as response:
@@ -364,7 +373,7 @@ def send_heartbeat():
     request = urllib.request.Request(
         HEARTBEAT_URL,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=api_headers(),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=5) as response:
@@ -389,7 +398,7 @@ def send_patrol_snapshot(current):
     request = urllib.request.Request(
         PATROL_SNAPSHOT_URL,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=api_headers(),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=COLLECTOR_TIMEOUT) as response:
@@ -463,7 +472,11 @@ def main():
                     new_state.get("canary_match", False) if new_state
                     else old_state.get("canary_match", False)
                 )
-                send_event(event_type, path, old_hash, new_hash, signal)
+                detect_seconds = (
+                    round(max(0.0, time.time() - new_state["mtime_ns"] / 1e9), 2)
+                    if new_state and new_state.get("mtime_ns") else None
+                )
+                send_event(event_type, path, old_hash, new_hash, signal, detect_seconds)
                 print(f"{HOST_ID}: {event_type} {path}", flush=True)
             except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as error:
                 print(f"{HOST_ID}: send failed: {error}", flush=True)

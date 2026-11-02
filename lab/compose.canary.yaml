@@ -2,5 +2,11 @@ services:
   collector:
     environment:
       ENABLE_LAB_AUTOREPAIR: "true"
-      DEMO_REPAIR_HOST: server-a
-      DEMO_REPAIR_DELAY_SECONDS: "75"
+      DEMO_REPAIR_HOST: all
+      DEMO_REPAIR_DELAY_SECONDS: "15"
+  remediator-a:
+    environment:
+      LAB_ATTACK_SIMULATION: "true"
+  remediator-b:
+    environment:
+      LAB_ATTACK_SIMULATION: "true"

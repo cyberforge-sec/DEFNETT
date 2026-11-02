@@ -369,6 +369,14 @@ button:hover, .btn:hover {
 .repair-timeline li.current { border-left-color: var(--accent-amber); background: rgba(243, 156, 18, 0.1); }
 .repair-timeline li.failed { border-left-color: var(--accent-red); }
 
+.badge.ready { color: var(--accent-teal); border-color: var(--accent-teal); }
+.badge.unavailable { color: var(--accent-red); border-color: var(--accent-red); }
+.repair-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.repair-metrics[hidden] { display: none; }
+.repair-metrics div { display: flex; flex-direction: column; gap: 2px; padding: 8px; background: var(--bg-card); border-radius: 4px; }
+.repair-metrics strong { font-family: var(--font-mono); font-size: 15px; color: var(--accent-teal); }
+.repair-metrics span { font-size: 10px; color: var(--text-muted); }
+
 /* Traffic grid */
 .traffic-grid-sidebar { display: flex; flex-direction: column; gap: 8px; }
 .traffic-card {

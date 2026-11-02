@@ -193,10 +193,17 @@
               <div id="repair-mode" class="badge">Mode</div>
               <div id="remediator-health" class="badge">Worker</div>
               <div id="repair-status" class="status-indicator">Status</div>
+              <div id="evidence-status" class="badge">Bukti</div>
             </div>
             <strong id="repair-headline">Playbook</strong>
             <p id="repair-detail" class="small-text"></p>
+            <div id="repair-metrics" class="repair-metrics" hidden>
+              <div><strong id="metric-detect">-</strong><span>Deteksi</span></div>
+              <div><strong id="metric-isolate">-</strong><span>Isolasi</span></div>
+              <div><strong id="metric-recover">-</strong><span id="metric-recover-label">Pulih</span></div>
+            </div>
             <dl id="repair-facts" class="repair-facts-compact" hidden>
+              <dt>Masuk</dt><dd id="repair-entry">-</dd>
               <dt>File</dt><dd id="repair-file">-</dd>
               <dt>Lain</dt><dd id="repair-survivor">-</dd>
               <dt>Bukti</dt><dd id="repair-quarantine">-</dd>

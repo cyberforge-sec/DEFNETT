@@ -103,6 +103,7 @@ function renderRemediation(data) {
   const run = data.remediation;
   const items = [...document.querySelectorAll("#repair-steps [data-stage]")];
   $("#repair-facts").hidden = !run;
+  $("#repair-metrics").hidden = !run;
   if (!run) {
     $("#repair-status").className = "status-indicator waiting";
     $("#repair-status").textContent = enabled ? "Siap" : "Observasi";
@@ -131,6 +132,12 @@ function renderRemediation(data) {
       : "Pemulihan gagal"
       : remediationLabels[run.status] || run.status;
   $("#repair-detail").textContent = failed ? run.detail || "" : "";
+  const metrics = run.metrics || {};
+  $("#metric-detect").textContent = formatSeconds(metrics.detect);
+  $("#metric-isolate").textContent = formatSeconds(metrics.isolate);
+  $("#metric-recover").textContent = formatSeconds(metrics.demo_hold ? metrics.recover_without_hold : metrics.recover);
+  $("#metric-recover-label").textContent = metrics.demo_hold ? `Pulih, tanpa jeda demo ${metrics.demo_hold} dtk` : "Pulih";
+  $("#repair-entry").textContent = run.entry ? `${run.entry.actor} lewat port ${run.entry.port}` : "Tidak diketahui";
   $("#repair-file").textContent = `${run.host_id || "server-a"} · ${run.path || "-"}`;
   const survivor = run.host_id === "server-a" ? "server-b" : "server-a";
   $("#repair-survivor").textContent = `${survivor} ${backendState(data.backends?.[survivor])[1]}`;
@@ -144,6 +151,24 @@ function renderRemediation(data) {
     item.hidden = !step;
     item.className = !step ? "" : stage === "FAILED" ? "failed"
       : stage === latest && !successful ? "current" : "done";
+  }
+}
+
+function formatSeconds(value) {
+  return Number.isFinite(value) ? `${value.toLocaleString("id-ID")} dtk` : "-";
+}
+
+async function refreshEvidence() {
+  const badge = $("#evidence-status");
+  try {
+    const response = await fetch("/v1/evidence/verify", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    badge.textContent = result.status === "ok" ? `Bukti utuh · ${result.events} event` : "Bukti rusak";
+    badge.className = `badge ${result.status === "ok" ? "ready" : "unavailable"}`;
+  } catch (error) {
+    badge.textContent = "Bukti tidak terbaca";
+    badge.className = "badge unavailable";
   }
 }
 
@@ -340,3 +365,5 @@ function scheduleRefresh() {
 }
 refresh();
 scheduleRefresh();
+refreshEvidence();
+window.setInterval(refreshEvidence, 15000);

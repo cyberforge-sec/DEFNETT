@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -57,6 +58,10 @@ MAX_BODY_BYTES = 64_000_000
 MAX_INVENTORY_DIRECTORIES = 200_000
 MAX_INVENTORY_ENTRIES = 1_000_000
 MAX_LISTING_ENTRIES = 5000
+API_TOKEN = os.environ.get("LAB_API_TOKEN", "")
+AGENT_PATHS = {"/v1/events", "/v1/patrol/snapshot", "/v1/patrol/inventory", "/api/patrol/events", "/v1/agent/heartbeat"}
+ENTRY_WINDOW_SECONDS = 600
+CHAIN_LOCK = threading.Lock()
 MAX_OPEN_PORTS = 32
 OPEN_PORTS = {}
 FS_ENTRY_KINDS = {"dir", "file", "link", "other", "virtual"}
@@ -106,6 +111,10 @@ def initialize():
             connection.execute(
                 "ALTER TABLE remediation_runs ADD COLUMN step_history TEXT NOT NULL DEFAULT '[]'"
             )
+        if "detect_seconds" not in remediation_columns:
+            connection.execute("ALTER TABLE remediation_runs ADD COLUMN detect_seconds REAL")
+        if "entry_json" not in remediation_columns:
+            connection.execute("ALTER TABLE remediation_runs ADD COLUMN entry_json TEXT")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS events (
                 id TEXT PRIMARY KEY,
@@ -139,6 +148,8 @@ def initialize():
             connection.execute(
                 "ALTER TABLE events ADD COLUMN response_action TEXT NOT NULL DEFAULT 'none'"
             )
+        if "canonical_json" not in columns:
+            connection.execute("ALTER TABLE events ADD COLUMN canonical_json TEXT")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS patrol_snapshots (
                 host_id TEXT PRIMARY KEY,
@@ -254,7 +265,8 @@ def backend_is_up(server_name):
     header = lines[0].lstrip("# ").split(",")
     for row in csv.DictReader(lines[1:], fieldnames=header):
         if row.get("pxname") == "defnett_servers" and row.get("svname") == server_name:
-            return row.get("status", "").startswith("UP")
+            # "UP 1/2" berarti HAProxy masih menunggu hasil pemeriksaan; hanya "UP" yang dianggap sehat.
+            return row.get("status", "").strip() == "UP"
     return False
 
 
@@ -379,7 +391,95 @@ def remediation_rows(limit=20):
             row["steps"] = json.loads(row.pop("step_history"))
         except (json.JSONDecodeError, TypeError):
             row["steps"] = []
+        try:
+            row["entry"] = json.loads(row.pop("entry_json") or "null")
+        except (json.JSONDecodeError, TypeError):
+            row["entry"] = None
+        row["metrics"] = run_metrics(row)
     return result
+
+
+def run_metrics(run):
+    """Waktu respons satu insiden, dihitung dari stempel waktu tahap yang tercatat."""
+    stamps = {}
+    for step in run["steps"]:
+        try:
+            stamps[step["stage"]] = datetime.fromisoformat(step["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    def elapsed(start, end):
+        if start not in stamps or end not in stamps:
+            return None
+        return round((stamps[end] - stamps[start]).total_seconds(), 2)
+
+    recover = elapsed("DETECTED", "REPAIRED")
+    hold = DEMO_REPAIR_DELAY_SECONDS if repair_delay_applies(run["host_id"]) else 0
+    return {
+        "detect": run.get("detect_seconds"),
+        "isolate": elapsed("DETECTED", "ISOLATED"),
+        "recover": recover,
+        "demo_hold": hold,
+        "recover_without_hold": None if recover is None else round(max(0.0, recover - hold), 2),
+    }
+
+
+def recent_entry(host_id):
+    """Login berhasil terakhir di host ini, dipakai sebagai dugaan jalur masuk insiden."""
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT ts, actor, port, path FROM patrol_events
+               WHERE host_id = ? AND action = 'login' AND status = 'allowed' AND port IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (host_id,),
+        ).fetchall()
+    if not rows:
+        return None
+    entry = dict(rows[0])
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(entry["ts"])).total_seconds()
+    except ValueError:
+        return None
+    return entry if 0 <= age <= ENTRY_WINDOW_SECONDS else None
+
+
+def verify_evidence():
+    """Periksa rantai hash event: tautan antarbaris, hash isi, dan kecocokan kolom utama."""
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT id, host_id, path, old_hash, new_hash, previous_hash, integrity_hash, canonical_json
+               FROM events ORDER BY rowid"""
+        ).fetchall()
+        last_hash = connection.execute("SELECT last_hash FROM chain_state WHERE id = 1").fetchone()["last_hash"]
+
+    def broken(row, reason):
+        return {"status": "broken", "events": len(rows), "reason": reason, "event_id": row["id"] if row else None}
+
+    previous = ""
+    fully_verified = 0
+    for row in rows:
+        if row["previous_hash"] != previous:
+            return broken(row, "chain_link_mismatch")
+        canonical = row["canonical_json"]
+        if canonical is not None:
+            if hashlib.sha256((previous + canonical).encode("utf-8")).hexdigest() != row["integrity_hash"]:
+                return broken(row, "content_hash_mismatch")
+            recorded = json.loads(canonical)
+            if any(recorded.get(key) != row[key] for key in ("host_id", "path", "old_hash", "new_hash")):
+                return broken(row, "stored_field_mismatch")
+            fully_verified += 1
+        previous = row["integrity_hash"]
+    if previous != last_hash:
+        return broken(rows[-1] if rows else None, "chain_head_mismatch")
+    return {"status": "ok", "events": len(rows), "fully_verified": fully_verified,
+            "link_only": len(rows) - fully_verified}
+
+
+def internal_headers():
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
+    return headers
 
 
 def request_lab_repair(event_id, host_id, kind="canary"):
@@ -387,7 +487,7 @@ def request_lab_repair(event_id, host_id, kind="canary"):
     request = urllib.request.Request(
         REMEDIATOR_URLS[host_id],
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=internal_headers(),
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -444,7 +544,7 @@ def start_lab_attack(host_id, vector=None, actor=None):
         request = urllib.request.Request(
             REMEDIATOR_URLS[host_id].rsplit("/", 1)[0] + "/lab/attack",
             data=json.dumps({"host_id": host_id}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=internal_headers(),
             method="POST",
         )
         try:
@@ -487,19 +587,23 @@ def run_canary_response(event, event_id):
     detected_detail = "Kunci lab terverifikasi." if is_key else "Canary lab terverifikasi."
 
     now = datetime.now(timezone.utc).isoformat()
+    detect_seconds = event.get("detect_seconds")
+    if not isinstance(detect_seconds, (int, float)) or isinstance(detect_seconds, bool) or not 0 <= detect_seconds <= 3600:
+        detect_seconds = None
+    entry = recent_entry(target)
     with connect() as connection:
         connection.execute(
             """INSERT OR REPLACE INTO remediation_runs
                (event_id, host_id, path, status, detail, quarantine_path,
-                step_history, started_at, updated_at, completed_at)
-               VALUES (?, ?, ?, 'DETECTED', ?, NULL, ?, ?, ?, NULL)""",
+                step_history, started_at, updated_at, completed_at, detect_seconds, entry_json)
+               VALUES (?, ?, ?, 'DETECTED', ?, NULL, ?, ?, ?, NULL, ?, ?)""",
             (
                 event_id, event["host_id"], event["path"], detected_detail,
                 json.dumps([{
                     "stage": "DETECTED",
                     "detail": detected_detail,
                     "timestamp": now,
-                }]), now, now,
+                }]), now, now, detect_seconds, entry and json.dumps(entry),
             ),
         )
     traffic_enter_stage(event_id, "DETECTED")
@@ -599,7 +703,7 @@ def store_event(event):
         separators=(",", ":"),
     )
 
-    with connect() as connection:
+    with CHAIN_LOCK, connect() as connection:
         previous_hash = connection.execute(
             "SELECT last_hash FROM chain_state WHERE id = 1"
         ).fetchone()["last_hash"]
@@ -611,13 +715,14 @@ def store_event(event):
                 id, trajectory_id, timestamp, host_id, source, event_type, path,
                 old_hash, new_hash, previous_hash, integrity_hash, p_attack,
                 impact, risk, level, recommendation, advisor_verdict, mode,
-                content_signal, response_action
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                content_signal, response_action, canonical_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 event_id, trajectory_id, timestamp, event["host_id"], event["source"],
                 event["event_type"], event["path"], event.get("old_hash"), event.get("new_hash"),
                 previous_hash, integrity_hash, p_attack, IMPACT, risk, level,
                 recommendation, verdict, "DRY_RUN", int(bool(event.get("content_signal"))), "none",
+                canonical,
             ),
         )
         connection.execute(
@@ -1071,6 +1176,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, patrol_state())
         if self.path == "/v1/fsmap":
             return self.respond(200, build_fs_tree("/"))
+        if self.path == "/v1/evidence/verify":
+            return self.respond(200, verify_evidence())
         if urlsplit(self.path).path == "/api/patrol/fs":
             query = parse_qs(urlsplit(self.path).query)
             try:
@@ -1092,6 +1199,10 @@ class Handler(BaseHTTPRequestHandler):
         return self.respond(404, {"error": "not_found"})
 
     def do_POST(self):
+        if self.path in AGENT_PATHS and API_TOKEN and not hmac.compare_digest(
+            self.headers.get("Authorization", ""), f"Bearer {API_TOKEN}"
+        ):
+            return self.respond(401, {"error": "unauthorized"})
         if self.path == "/v1/patrol/snapshot":
             return self.receive_patrol_snapshot()
         if self.path == "/v1/patrol/inventory":

@@ -2,6 +2,39 @@
 
 Lab pertahanan siber dua server di balik load balancer. Agent memantau integritas file, collector menilai risiko, dan saat file penting diubah, server target dikeluarkan dari HAProxy, dipulihkan, lalu dimasukkan kembali, sementara situs tetap melayani lewat server lainnya.
 
+Karya untuk Kartika Cyber Hackathon 2026, kategori **Penangkalan** (Automated Incident Response).
+
+## Relevansi untuk pengamanan sistem satuan
+
+- **Layanan tetap hidup.** Server yang diserang diisolasi tanpa memutus pengguna, selama ada server lain yang sehat.
+- **Respons otomatis.** Isolasi, karantina, dan pemulihan berjalan tanpa menunggu keputusan operator.
+- **Bukti terjaga.** File yang rusak dikarantina, dan event dicatat di SQLite dengan hash chain.
+- **Bisa di jaringan tertutup.** Kode tim hanya memakai pustaka standar Python, ditambah HAProxy dan SQLite, tanpa layanan cloud.
+- **Waktu respons terukur.** Setiap insiden mencatat waktu deteksi, isolasi, dan pulih.
+
+Ini purwarupa lab. Penerapan di lingkungan satuan memerlukan pengujian lanjutan.
+
+## Cara mencoba
+
+Pilih salah satu:
+
+- **Docker (satu komputer):** jalankan `sh lab/build.sh`, lalu buka dashboard di `http://127.0.0.1:8090/`.
+- **Empat VM VirtualBox:** konfigurasi ada di [lab/vm](lab/vm); dashboard di `http://192.168.56.20:8090/`.
+- **Tanpa menjalankan apa pun:** lihat bagian Tampilan di bawah dan video demo.
+
+Setelah dashboard terbuka, pilih tab **Patrol**, pilih server dan jalur (SSH atau Web), lalu tekan **Serang!**.
+
+Pengujian otomatis: `python3 -m unittest discover -s lab/tests`. Dokumen lengkap: [Dokumentasi Teknis](docs/DOKUMENTASI_TEKNIS.md) dan [Hasil Uji](docs/HASIL_UJI.md).
+
+## Hasil uji
+
+Diuji dengan enam insiden sungguhan di empat VM: 6 dari 6 pulih, dan 400 permintaan lewat load balancer semuanya berhasil. Deteksi paling lama 3,02 detik, isolasi paling lama 0,02 detik, dan pemulihan paling lama 1,55 detik di luar jeda demo. Jalur Docker juga lolos uji dari instalasi bersih.
+
+## Materi submission
+
+- Video demo: [isi tautan YouTube]
+- Slide penjelasan: [isi tautan slide]
+
 ## Arsitektur
 
 | VM | Alamat | Peran |
@@ -63,6 +96,12 @@ Lab ini sengaja dibuat rentan dan **hanya untuk jaringan lab yang terisolasi**.
 - **Data contoh:** `kunci1.dat` dan `kunci2.dat`, akun blog, dan seluruh isi `/data` adalah data buatan, bukan data nyata.
 - **Jangan dipasang di jaringan publik:** jangan dibuka ke internet dan jangan diisi data pribadi. Jaringan antar VM memakai host-only, dan firewall tiap VM hanya mengizinkan lalu lintas yang diperlukan.
 - **Skor risiko berbasis aturan:** penilaian di dashboard bukan model AI terlatih, dan tombol **Serang!** hanya mengubah file kunci demo di server lab.
+
+## Komponen dan atribusi
+
+Dibuat tim: agent FIM (`lab/agent.py`), collector (`lab/collector.py`), remediator (`lab/remediator.py`), aplikasi demo (`lab/app.py`), dan dashboard (`lab/dashboard`).
+
+Pihak ketiga, dipakai sesuai lisensi masing-masing: HAProxy, WordPress 5.0, Python, SQLite, Docker, dan VirtualBox. [Tambahkan aset visual atau library lain jika ada.]
 
 ## Rencana pengembangan
 

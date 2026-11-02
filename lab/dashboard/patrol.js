@@ -1533,7 +1533,11 @@ function updateIncidentUI() {
   $("#incident-title").textContent = `${HOST_LABEL[sc.host]} · ${STAGE_TEXT[sc.vis]?.[0] || sc.vis}`;
   $("#incident-lb").textContent = `LB  ${hosts.map((host) => `${host.at(-1).toUpperCase()} ${lbStatus(host)[0]}`).join("  ·  ")}`;
   const idx = STAGES.indexOf(sc.vis), prog = repairProgress(sc);
-  $("#incident-timer").textContent = prog ? prog.label : "";
+  const metrics = sc.run?.metrics || {};
+  const done = sc.vis === "REPAIRED" && Number.isFinite(metrics.isolate)
+    ? `Isolasi ${metrics.isolate} dtk · Pulih ${metrics.demo_hold ? metrics.recover_without_hold : metrics.recover} dtk`
+    : "";
+  $("#incident-timer").textContent = prog ? prog.label : done;
   node.querySelectorAll("[data-stage]").forEach((li) => {
     const i = STAGES.indexOf(li.dataset.stage);
     li.className = sc.vis === "FAILED" ? (i <= STAGES.indexOf("ISOLATING") && sc.seen.has(li.dataset.stage) ? "done" : "") : i < idx ? "done" : i === idx ? "current" : "";

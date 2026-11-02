@@ -16,6 +16,8 @@ DATA_FILE = DATA_ROOT / "index.txt"
 COLLECTOR_URL = os.environ.get(
     "PATROL_EVENT_URL", "http://collector:8090/api/patrol/events"
 )
+API_TOKEN = os.environ.get("LAB_API_TOKEN", "")
+API_HEADERS = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
 PUBLIC_FILES = {
     item.strip().replace("\\", "/")
     for item in os.environ.get("PATROL_PUBLIC_FILES", "index.txt").split(",")
@@ -163,7 +165,7 @@ class Handler(BaseHTTPRequestHandler):
         request = urllib.request.Request(
             COLLECTOR_URL,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **API_HEADERS},
             method="POST",
         )
         try:

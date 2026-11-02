@@ -1,4 +1,4 @@
-# DEFNETT Docker Lab
+# DEFNETT Lab
 
 Lab ini mengimplementasikan dua server aplikasi dalam container, HAProxy, dua agent pemantau file, collector, worker remediation terpisah, karantina artefak, dan dashboard. Collector menyimpan event serta tahapan playbook di SQLite dengan hash chain.
 
@@ -23,13 +23,15 @@ Docker Engine harus sudah aktif. Aplikasi tersedia hanya pada komputer lokal:
 - Ringkasan dashboard (status backend, heartbeat agent, keputusan): `http://127.0.0.1:8090/v1/dashboard`
 - Ringkasan jumlah event: `http://127.0.0.1:8090/v1/summary`
 
-Perintah dasar di atas menjalankan collector dalam `DRY_RUN`. Untuk menyalakan playbook otomatis khusus canary lab:
+Perintah dasar di atas menjalankan collector dalam `DRY_RUN`. Untuk menjalankan demo lengkap, termasuk data contoh, playbook otomatis, dan tombol **Serang!**, pakai satu perintah ini:
 
 ```sh
-docker compose -f lab/compose.yaml -f lab/compose.canary.yaml up -d --build
+sh lab/build.sh
 ```
 
-Dashboard menampilkan kesiapan worker dan tahapan setiap pemulihan. Overlay demo menahan tahap perbaikan Server A selama 75 detik (`DEMO_REPAIR_DELAY_SECONDS`). Hitung mundurnya tampil di dashboard saat Server A terisolasi; setelah jeda, artefak canary dikarantina, health check dijalankan, lalu Server A aktif kembali jika sehat. Durasi 75 detik hanya untuk memperlihatkan alur demo dan muat dalam slot containment 2:00-3:15; penanganan insiden sebenarnya bergantung pada tingkat kesulitan.
+Di Docker, agent berjalan di container terpisah dari server, jadi port tidak terbaca dan peta menampilkan satu pintu bawaan. Jalur SSH atau Web yang dipilih tetap tercatat di tab Playbook. Empat pintu dan blog WordPress hanya ada pada lab VM di `lab/vm`.
+
+Dashboard menampilkan kesiapan worker dan tahapan setiap pemulihan. Overlay demo menahan tahap perbaikan selama 15 detik (`DEMO_REPAIR_DELAY_SECONDS`) agar isolasi terlihat. Hitung mundurnya tampil di dashboard saat server terisolasi; setelah jeda, artefak canary dikarantina, health check dijalankan, lalu Server A aktif kembali jika sehat. Jeda ini hanya untuk memperlihatkan alur demo, dan dashboard melaporkan waktu pulih tanpa jeda tersebut.
 
 Dashboard memiliki tab **Patrol**. Peta Canvas 2D menyusun file dari snapshot hash agent ke ruang per server, menampilkan agent patroli, aktor berdasarkan IP, event akses, severity, dan detail hash. Snapshot hanya mengirim path relatif dan SHA-256, bukan isi file. Agent memakai `WATCH_ROOT` sebagai konfigurasi folder yang dipantau.
 
@@ -73,7 +75,7 @@ Playbook memilih host dari event. Setiap server memiliki worker dan volume karan
 
 1. Memastikan backend survivor sehat.
 2. Mengeluarkan hanya host target dari rotasi HAProxy.
-3. Untuk demo Server A, dashboard menampilkan jeda 75 detik saat A tetap terisolasi. Setelah jeda, worker host target mengarantina file canary terverifikasi ke volume terpisah.
+3. Dashboard menampilkan jeda demo saat host tetap terisolasi. Setelah jeda, worker host target mengarantina file canary terverifikasi ke volume terpisah.
 4. HAProxy menjalankan health check dan mengaktifkan kembali hanya host target jika sehat.
 
 Script default menguji Server A. Untuk menguji Server B sebagai host target:
@@ -140,11 +142,27 @@ sh lab/demo.sh
 
 Agent akan mendeteksi perubahan `etc/new-config.txt` pada Server A dan mengirim event ke collector. Respons contoh tetap `DRY_RUN`; endpoint layanan tetap berjalan melalui HAProxy.
 
+## Waktu respons, jalur masuk, dan rantai bukti
+
+Tab **Playbook** menampilkan tiga angka yang dihitung dari stempel waktu insiden: waktu deteksi, waktu isolasi, dan waktu pulih tanpa jeda demo. Bila ada login berhasil di host yang sama dalam 10 menit terakhir, insiden mencatat IP dan port masuknya.
+
+`GET /v1/evidence/verify` memeriksa seluruh rantai event, dan hasilnya tampil sebagai lencana **Bukti utuh**. Hash mendeteksi perubahan pada baris yang tersimpan, tapi rantai ini belum ditanam ke sistem eksternal, sehingga penyerang yang menguasai database masih bisa menulis ulang seluruh rantai.
+
+## Autentikasi antarkomponen
+
+Bila `LAB_API_TOKEN` diisi, collector dan remediator menolak permintaan mesin tanpa token yang cocok. Token dibaca dari env masing-masing layanan dan tidak disimpan di repo. Lab Docker tidak mengaktifkannya karena jaringannya internal. Dashboard belum punya login, jadi port 8090 harus dibatasi firewall.
+
+## Pengujian otomatis
+
+```sh
+python3 -m unittest discover -s lab/tests
+```
+
 ## Skrip utilitas
 
 | Skrip | Fungsi |
 |---|---|
-| `sh lab/build.sh` | Bereskan berkas AppleDouble `._*` dari volume macOS, bangun ulang image, dan hidupkan lab lengkap + canary dalam satu perintah. |
+| `sh lab/build.sh` | Bangun image, hidupkan lab lengkap, isi data contoh, dan siapkan salinan master kunci dalam satu perintah. |
 | `sh lab/demo.sh` | Simulasi operator: ubah `etc/new-config.txt`, lalu lihat event/hash chain di collector. |
 | `sh lab/attack.sh` | Simulasi pencuri lewat HAProxy: mengintip file publik, menebak nama sensitif, lalu mencoba `etc/kunci1.dat`/`etc/kunci2.dat` termasuk `?download=1` — setiap percobaan ditolak 403 dan muncul sebagai event denied (animasi pencuri di Patrol bergolak). |
 | `sh lab/test-containment.sh` | Uji playbook penuh: canary → isolasi → karantina → verifikasi → rejoin + asersi trafik sebelum/selama/sesudah. |
@@ -172,6 +190,6 @@ Dashboard menampilkan heartbeat agent, status tiap worker, server yang menjadi t
 - Pemantauan polling membaca file di `/data`; belum menggunakan Wazuh agent atau memantau file sistem host.
 - SQLite dan hash chain membantu demonstrasi audit, tetapi bukan penyimpanan bukti tahan manipulasi produksi.
 - Collector menggabungkan ingestion, normalisasi minimal, penyimpanan, trajectory, scoring, dan policy dalam satu proses agar irisan end-to-end mudah dijalankan.
-- Belum ada koneksi Cloud/Local LLM, classifier terkalibrasi, atau isolasi jaringan container penuh. Isolasi lab mengeluarkan backend dari rotasi HAProxy.
-- Pemulihan otomatis terbatas pada satu file canary pada host yang terdeteksi. Kasus selain itu gagal tertutup dan perlu pemeriksaan operator.
+- Belum ada model ML, classifier terkalibrasi, atau isolasi jaringan container penuh. Isolasi lab mengeluarkan backend dari rotasi HAProxy.
+- Pemulihan otomatis terbatas pada file canary dan dua file kunci lab pada host yang terdeteksi. Kasus selain itu gagal tertutup dan perlu pemeriksaan operator.
 - Network Compose untuk layanan, telemetri, kontrol HAProxy, dan remediation dibuat terpisah/internal. HAProxy dan collector saja yang mempublikasikan port ke `127.0.0.1`.

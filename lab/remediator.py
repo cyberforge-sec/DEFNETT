@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import os
 import stat
@@ -18,6 +19,7 @@ KEY_NAMES = ("etc/kunci1.dat", "etc/kunci2.dat")
 KEY_MARKER = b"SECRET kunci"
 MAX_FILE_SIZE = 1024 * 1024
 ATTACK_SIMULATION = os.environ.get("LAB_ATTACK_SIMULATION", "false").lower() == "true"
+API_TOKEN = os.environ.get("LAB_API_TOKEN", "")
 
 
 def read_regular_file(path):
@@ -225,6 +227,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path not in ("/v1/repair", "/v1/lab/attack"):
             return self.respond(404, {"error": "not_found"})
+        if API_TOKEN and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {API_TOKEN}"):
+            return self.respond(401, {"error": "unauthorized"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 2048:

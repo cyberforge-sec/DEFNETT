@@ -35,6 +35,14 @@ Setelah file dipulihkan dan health check lolos, Server A kembali ke rotasi:
 
 ![Pulih](lab/screenshots/06-pulih.png)
 
+## Rencana pengembangan
+
+Jika lolos ke babak selanjutnya, kami akan:
+
+- **Membuat model ML untuk skor risiko**, agar penilaian lebih akurat daripada skor berbasis aturan yang dipakai sekarang.
+- **Membatasi Polisi AI (agent FIM) ke izin read-only**, sehingga agent hanya bisa membaca dan memantau file.
+- **Membatasi Satpam (remediator) ke izin execute dan write saja**, sehingga Satpam hanya menjalankan perbaikan dan menulis file pemulihan.
+
 ## Dokumentasi
 
 Cara menjalankan dan detail teknis ada di [lab/README.md](lab/README.md). Konfigurasi VM ada di [lab/vm](lab/vm).

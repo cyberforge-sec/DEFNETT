@@ -1382,13 +1382,13 @@ function renderFsEntries(listing) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `fs-row fs-${entry.type}`;
+    const path = fsChild(entry.name);
     const name = document.createElement("span");
     name.className = "fs-name";
-    name.textContent = cleanText(entry.name, 255) + (entry.type === "dir" ? "/" : "");
+    name.textContent = cleanText(path, 1024);
     const meta = document.createElement("small");
     meta.textContent = entry.type === "file" ? formatBytes(entry.size) : FS_LABEL[entry.type] || "";
     button.append(name, meta);
-    const path = fsChild(entry.name);
     button.addEventListener("click", () => {
       if (entry.type === "dir") { loadFsListing(path); return; }
       showDetail(`${HOST_LABEL[listing.host_id]} · ${cleanText(path, 512)} · ${FS_LABEL[entry.type] || "-"} · ${formatBytes(entry.size) || "-"} · ${formatFsTime(entry.mtime)}`);

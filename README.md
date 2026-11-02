@@ -35,6 +35,25 @@ Setelah file dipulihkan dan health check lolos, Server A kembali ke rotasi:
 
 ![Pulih](lab/screenshots/06-pulih.png)
 
+## Situs yang dilayani
+
+Kedua server melayani blog WordPress di port 80, dan HAProxy membagi trafik ke keduanya. Setiap halaman memuat lencana serta judul **SERVER A** atau **SERVER B**, sehingga server yang menjawab langsung terlihat.
+
+![Blog di Server A](lab/screenshots/07-blog-server-a.png)
+
+![Blog di Server B](lab/screenshots/08-blog-server-b.png)
+
+Konfigurasi gateway ada di [lab/vm/gateway/haproxy.cfg](lab/vm/gateway/haproxy.cfg). WordPress 5.0 memerlukan satu perbaikan agar halaman daftar tulisan tampil di PHP 8, yaitu [lab/vm/fix-wp-php8-home.sh](lab/vm/fix-wp-php8-home.sh).
+
+## Catatan keamanan
+
+Lab ini sengaja dibuat rentan dan **hanya untuk jaringan lab yang terisolasi**.
+
+- **Perangkat lunak lama:** blog memakai WordPress 5.0, versi lama yang memiliki kerentanan publik yang sudah diketahui. Versi itu dipilih karena tujuan lab ini adalah mengamati deteksi dan respons terhadap serangan, bukan menjaga situs tetap aman.
+- **Data contoh:** `kunci1.dat` dan `kunci2.dat`, akun blog, dan seluruh isi `/data` adalah data buatan, bukan data nyata.
+- **Jangan dipasang di jaringan publik:** jangan dibuka ke internet dan jangan diisi data pribadi. Jaringan antar VM memakai host-only, dan firewall tiap VM hanya mengizinkan lalu lintas yang diperlukan.
+- **Skor risiko berbasis aturan:** penilaian di dashboard bukan model AI terlatih, dan tombol **Serang!** hanya mengubah file kunci demo di server lab.
+
 ## Rencana pengembangan
 
 Jika lolos ke babak selanjutnya, kami akan:
